@@ -1021,9 +1021,9 @@ int main(int argc, char** argv) {
                 std::vector<int64_t> day_cat_rev(num_days * num_cats, 0);
                 std::vector<std::vector<uint16_t>> day_active_cats(num_days);
 
-                // Sliding click window campaign counts (sparse reset!)
-                std::vector<uint32_t> camp_cnt(num_camps, 0);
-                std::vector<uint32_t> active_camps;
+                // Assist deduplication per session (monotonically increasing sequence)
+                std::vector<uint64_t> camp_last_sess(num_camps, 0);
+                uint64_t sess_seq = 0;
 
                 while (true) {
                     size_t p = next_p.fetch_add(1, std::memory_order_relaxed);
@@ -1117,7 +1117,6 @@ int main(int argc, char** argv) {
 
                         uint32_t L = cb, R = cb;
                         active_days.clear();
-                        active_camps.clear();
 
                         uint32_t i = eb;
                         while (i < ee) {
@@ -1152,13 +1151,9 @@ int main(int argc, char** argv) {
 
                             // Sliding click window [L, R)
                             while (R < ce && sorted_clks[R].ts <= sess_start) {
-                                uint32_t c = sorted_clks[R].camp_id;
-                                if (camp_cnt[c] == 0) active_camps.push_back(c);
-                                camp_cnt[c]++;
                                 R++;
                             }
                             while (L < R && (sess_start - sorted_clks[L].ts) > SEVEN_DAYS_MS) {
-                                camp_cnt[sorted_clks[L].camp_id]--;
                                 L++;
                             }
 
@@ -1169,16 +1164,15 @@ int main(int argc, char** argv) {
                                 if (sess_purch) cd.purchasing_sessions += 1;
                                 cd.revenue_cents += sess_rev;
 
-                                // Assists (compact zeroed active_camps lazily)
-                                size_t wpos = 0;
-                                for (size_t k = 0; k < active_camps.size(); ++k) {
-                                    uint32_t ac = active_camps[k];
-                                    if (camp_cnt[ac] > 0) {
+                                // Assists: each distinct qualifying campaign assists this session once
+                                sess_seq++;
+                                for (uint32_t k = L; k < R; ++k) {
+                                    uint32_t ac = sorted_clks[k].camp_id;
+                                    if (camp_last_sess[ac] != sess_seq) {
+                                        camp_last_sess[ac] = sess_seq;
                                         my_camp[static_cast<size_t>(ac) * num_days + d_idx].assisted_sessions += 1;
-                                        active_camps[wpos++] = ac;
                                     }
                                 }
-                                active_camps.resize(wpos);
                             } else {
                                 // Organic (camp_id = 0)
                                 auto& cd = my_camp[static_cast<size_t>(0) * num_days + d_idx];
@@ -1187,9 +1181,6 @@ int main(int argc, char** argv) {
                                 cd.revenue_cents += sess_rev;
                             }
                         }
-
-                        // Clear remaining camp_cnt
-                        for (uint32_t ac : active_camps) camp_cnt[ac] = 0;
 
                         // Emit user_daily rows for this person & reset day accumulators
                         std::string_view puid = p_uids[pid];
