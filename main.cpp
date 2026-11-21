@@ -99,7 +99,7 @@ struct MmapFile {
                 ::close(fd); fd = -1;
                 throw std::runtime_error("mmap failed: " + path);
             }
-            ::madvise(ptr, size, MADV_SEQUENTIAL);
+            ::madvise(ptr, size, MADV_WILLNEED | MADV_SEQUENTIAL);
             data = static_cast<const char*>(ptr);
         }
         ::close(fd);
@@ -707,6 +707,11 @@ int main(int argc, char** argv) {
         build_chunks(ev_files, ev_chunks);
     }
 
+    size_t total_ev_bytes = 0;
+    for (const auto& mf : ev_files) total_ev_bytes += mf.size;
+    size_t est_total_evs = total_ev_bytes / 55;
+    size_t per_bucket_ev_cap = est_total_evs / (ncpu * NUM_BUCKETS) + 4096;
+
     // Per-thread raw event buckets [tid][NUM_BUCKETS]
     std::vector<std::vector<std::vector<RawEvent>>> raw_ev_buckets(
         ncpu, std::vector<std::vector<RawEvent>>(NUM_BUCKETS));
@@ -717,6 +722,9 @@ int main(int argc, char** argv) {
         for (int t = 0; t < ncpu; ++t) {
             workers.emplace_back([&, t]() {
                 auto& my_buckets = raw_ev_buckets[t];
+                for (size_t b = 0; b < NUM_BUCKETS; ++b) {
+                    my_buckets[b].reserve(per_bucket_ev_cap);
+                }
                 std::string_view cols[7];
                 while (true) {
                     size_t ci = next_chunk.fetch_add(1, std::memory_order_relaxed);
@@ -866,6 +874,11 @@ int main(int argc, char** argv) {
         build_chunks(clk_files, clk_chunks);
     }
 
+    size_t total_clk_bytes = 0;
+    for (const auto& mf : clk_files) total_clk_bytes += mf.size;
+    size_t est_total_clks = total_clk_bytes / 45;
+    size_t per_bucket_clk_cap = est_total_clks / (ncpu * NUM_BUCKETS) + 2048;
+
     std::vector<std::vector<std::vector<RawClick>>> raw_clk_buckets(
         ncpu, std::vector<std::vector<RawClick>>(NUM_BUCKETS));
 
@@ -875,6 +888,9 @@ int main(int argc, char** argv) {
         for (int t = 0; t < ncpu; ++t) {
             workers.emplace_back([&, t]() {
                 auto& my_buckets = raw_clk_buckets[t];
+                for (size_t b = 0; b < NUM_BUCKETS; ++b) {
+                    my_buckets[b].reserve(per_bucket_clk_cap);
+                }
                 std::string_view cols[4];
                 while (true) {
                     size_t ci = next_chunk.fetch_add(1, std::memory_order_relaxed);
