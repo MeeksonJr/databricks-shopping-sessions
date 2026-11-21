@@ -2,7 +2,7 @@ FROM gcc:13-bookworm AS builder
 
 WORKDIR /src
 COPY parquet_writer.hpp main.cpp /src/
-RUN g++ -O3 -march=x86-64-v3 -flto -std=c++20 -pthread /src/main.cpp -o /src/pipeline \
+RUN g++ -O3 -march=x86-64-v3 -flto -std=c++20 -pthread -static-libstdc++ -static-libgcc /src/main.cpp -o /src/pipeline \
     && strip /src/pipeline
 
 FROM debian:bookworm-slim
